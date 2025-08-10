@@ -1,0 +1,17 @@
+name: CI (Install ESP-IDF v5.5)
+
+on: { push: { branches: [ main ] }, pull_request: {} }
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ESP-IDF v5.5
+        uses: espressif/install-esp-idf-action@v1
+        with:
+          version: "v5.5"
+      - name: Build
+        run: |
+          idf.py set-target esp32s3
+          idf.py build
