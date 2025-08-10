@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  IDF_VERSION: v5.5
+  # Choose stable locations so the cache captures them
+  ESP_TOOLS_PATH: ${{ runner.home }}/esp/tools
+  ESP_IDF_PATH: ${{ runner.home }}/esp/idf
+
 jobs:
   lint:
     name: Lint (clang-tidy via ESP-IDF)
@@ -16,20 +22,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Reuse toolchains & IDF between runs
+      - name: Cache ESP-IDF & tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.espressif
+            ${{ env.ESP_TOOLS_PATH }}
+            ${{ env.ESP_IDF_PATH }}
+          key: ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-${{ hashFiles('**/CMakeLists.txt', '**/idf_component.yml', 'idf_component.yml', 'managed_components/**', '**/requirements.txt', 'requirements.txt', 'sdkconfig') }}
+          restore-keys: |
+            ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-
+
       - name: ESP-IDF Setup
         uses: espressif/install-esp-idf-action@v1
         with:
-          version: "v5.5"
+          version: ${{ env.IDF_VERSION }}
+          path: ${{ env.ESP_IDF_PATH }}
+          tools-path: ${{ env.ESP_TOOLS_PATH }}
 
       - name: Install ESP-IDF tools (incl. esp-clang)
         shell: bash
         run: |
           set -euo pipefail
-          # Install all required tools (core + python deps)
+          # Ensure core tools exist (fast no-op if cached)
           python3 "$IDF_PATH/tools/idf_tools.py" install
           # Install esp-clang for clang-tidy
           python3 "$IDF_PATH/tools/idf_tools.py" install esp-clang
-          # Activate the ESP-IDF environment now that tools are in place
+          # Activate now that tools exist
           . "$IDF_PATH/export.sh"
           idf.py --version
 
@@ -65,18 +85,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Same cache key -> hits the artifacts produced during lint job runs
+      - name: Restore ESP-IDF & tools cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.espressif
+            ${{ env.ESP_TOOLS_PATH }}
+            ${{ env.ESP_IDF_PATH }}
+          key: ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-${{ hashFiles('**/CMakeLists.txt', '**/idf_component.yml', 'idf_component.yml', 'managed_components/**', '**/requirements.txt', 'requirements.txt', 'sdkconfig') }}
+          restore-keys: |
+            ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-
+
       - name: ESP-IDF Setup
         uses: espressif/install-esp-idf-action@v1
         with:
-          version: "v5.5"
+          version: ${{ env.IDF_VERSION }}
+          path: ${{ env.ESP_IDF_PATH }}
+          tools-path: ${{ env.ESP_TOOLS_PATH }}
 
       - name: Install ESP-IDF tools
         shell: bash
         run: |
           set -euo pipefail
-          # Install required toolchains
+          # Fast if cache hit; ensures required toolchains are present
           python3 "$IDF_PATH/tools/idf_tools.py" install
-          # Activate environment
           . "$IDF_PATH/export.sh"
           idf.py --version
 
