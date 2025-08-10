@@ -1,4 +1,4 @@
-name: CI (Install ESP-IDF v5.5)
+name: ESP-IDF Build
 
 on: { push: { branches: [ main ] }, pull_request: {} }
 
