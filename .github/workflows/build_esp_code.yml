@@ -21,19 +21,16 @@ jobs:
         with:
           version: "v5.5"
 
-      - name: Install esp-clang toolchain
+      - name: Install ESP-IDF tools (incl. esp-clang)
         shell: bash
         run: |
-          set -e
-          # Load ESP-IDF env (activates venv, sets IDF_PATH/PATH, etc.)
+          set -euo pipefail
+          # Install all required tools (core + python deps)
+          python3 "$IDF_PATH/tools/idf_tools.py" install
+          # Install esp-clang for clang-tidy
+          python3 "$IDF_PATH/tools/idf_tools.py" install esp-clang
+          # Activate the ESP-IDF environment now that tools are in place
           . "$IDF_PATH/export.sh"
-          # Optional: keep pip current inside the ESP-IDF venv
-          python -m pip install --upgrade pip
-          # Install esp-clang using the explicit path to idf_tools.py
-          python "$IDF_PATH/tools/idf_tools.py" install esp-clang
-          # Re-export so the newly installed toolchain is on PATH
-          . "$IDF_PATH/export.sh"
-          # Sanity check
           idf.py --version
 
       - name: Run clang-tidy
@@ -72,6 +69,16 @@ jobs:
         uses: espressif/install-esp-idf-action@v1
         with:
           version: "v5.5"
+
+      - name: Install ESP-IDF tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Install required toolchains
+          python3 "$IDF_PATH/tools/idf_tools.py" install
+          # Activate environment
+          . "$IDF_PATH/export.sh"
+          idf.py --version
 
       - name: Build
         shell: bash
