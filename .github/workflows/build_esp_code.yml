@@ -24,9 +24,17 @@ jobs:
       - name: Install esp-clang toolchain
         shell: bash
         run: |
-          python -m pip install --upgrade pip
-          idf_tools.py install esp-clang
+          set -e
+          # Load ESP-IDF env (activates venv, sets IDF_PATH/PATH, etc.)
           . "$IDF_PATH/export.sh"
+          # Optional: keep pip current inside the ESP-IDF venv
+          python -m pip install --upgrade pip
+          # Install esp-clang using the explicit path to idf_tools.py
+          python "$IDF_PATH/tools/idf_tools.py" install esp-clang
+          # Re-export so the newly installed toolchain is on PATH
+          . "$IDF_PATH/export.sh"
+          # Sanity check
+          idf.py --version
 
       - name: Run clang-tidy
         shell: bash
@@ -68,6 +76,7 @@ jobs:
       - name: Build
         shell: bash
         run: |
+          set -e
           . "$IDF_PATH/export.sh"
           idf.py set-target esp32s3
           idf.py build
