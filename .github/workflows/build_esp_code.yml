@@ -26,4 +26,20 @@ jobs:
             ~/.espressif
             ${{ github.workspace }}/.esp/tools
             ${{ github.workspace }}/.esp/idf
-          key: ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-${{ hashFiles('**/CMakeLists.txt', '**_
+          key: "${{ format('{0}-espidf-{1}-{2}', runner.os, env.IDF_VERSION, hashFiles('**/CMakeLists.txt','**/idf_component.yml','idf_component.yml','managed_components/**','**/requirements.txt','requirements.txt','sdkconfig')) }}"
+          restore-keys: |
+            ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-
+
+      - name: ESP-IDF Setup
+        uses: espressif/install-esp-idf-action@v1
+        with:
+          version: ${{ env.IDF_VERSION }}
+          path: ${{ github.workspace }}/.esp/idf
+          tools-path: ${{ github.workspace }}/.esp/tools
+
+      # Install tools BEFORE export (idempotent; fixes esp-rom-elfs missing)
+      - name: Bootstrap ESP-IDF tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 "$IDF_PATH/too_
