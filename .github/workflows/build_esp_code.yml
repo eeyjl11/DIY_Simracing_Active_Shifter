@@ -32,21 +32,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-
 
-      - name: Debug info (before setup)
-        run: |
-          set -euxo pipefail
-          echo "Cache hit: ${{ steps.idf-cache.outputs.cache-hit }}"
-          python3 --version
-          echo "ESP_IDF_PATH will be: ${{ github.workspace }}/.esp/idf"
-          echo "ESP_TOOLS_PATH will be: ${{ github.workspace }}/.esp/tools"
-          ls -la "${GITHUB_WORKSPACE}/.esp" || true
-
       - name: ESP-IDF Setup
         uses: espressif/install-esp-idf-action@v1
         with:
           version: ${{ env.IDF_VERSION }}
           path: ${{ github.workspace }}/.esp/idf
           tools-path: ${{ github.workspace }}/.esp/tools
+
+      # ✅ Bootstrap tools BEFORE export.sh (fixes 'esp-rom-elfs has no installed versions')
+      - name: Bootstrap ESP-IDF tools
+        run: |
+          set -euxo pipefail
+          python3 "$IDF_PATH/tools/idf_tools.py" install
+          # Install esp-clang only for linting
+          python3 "$IDF_PATH/tools/idf_tools.py" install esp-clang
 
       - name: Verify environment
         run: |
@@ -55,13 +54,6 @@ jobs:
           which python
           python -m pip --version
           idf.py --version
-
-      - name: Install esp-clang (for clang-tidy)
-        run: |
-          set -euxo pipefail
-          python3 "$IDF_PATH/tools/idf_tools.py" install esp-clang
-          . "$IDF_PATH/export.sh"
-          command -v clang-tidy || true
 
       - name: Run clang-tidy
         env:
@@ -100,33 +92,4 @@ jobs:
       - name: Restore ESP-IDF & tools cache
         id: idf-cache
         uses: actions/cache@v4
-        with:
-          path: |
-            ~/.espressif
-            ${{ github.workspace }}/.esp/tools
-            ${{ github.workspace }}/.esp/idf
-          key: ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-${{ hashFiles('**/CMakeLists.txt', '**/idf_component.yml', 'idf_component.yml', 'managed_components/**', '**/requirements.txt', 'requirements.txt', 'sdkconfig') }}
-          restore-keys: |
-            ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-
-
-      - name: ESP-IDF Setup
-        uses: espressif/install-esp-idf-action@v1
-        with:
-          version: ${{ env.IDF_VERSION }}
-          path: ${{ github.workspace }}/.esp/idf
-          tools-path: ${{ github.workspace }}/.esp/tools
-
-      - name: Verify environment
-        run: |
-          set -euxo pipefail
-          . "$IDF_PATH/export.sh"
-          which python
-          python -m pip --version
-          idf.py --version
-
-      - name: Build
-        run: |
-          set -euxo pipefail
-          . "$IDF_PATH/export.sh"
-          idf.py set-target esp32s3
-          idf.py build
+        wit
