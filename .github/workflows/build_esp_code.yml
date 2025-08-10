@@ -67,7 +67,7 @@ jobs:
           set -euo pipefail
           . ${IDF_DIR}/export.sh
           idf.py set-target esp32s3
-          idf.py clang-check
+          idf.py clang-check --run-clang-tidy-options="-quiet -header-filter=(^|/)(main|components)/ --exclude-header-filter=(/\\.esp/|/esp-idf/)"
           # Optional HTML report
           python -m pip install codereport || true
           idf.py clang-html-report || true
