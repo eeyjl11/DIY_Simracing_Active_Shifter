@@ -10,9 +10,11 @@ jobs:
   lint:
     name: Lint (clang-tidy via ESP-IDF)
     runs-on: ubuntu-latest
-    continue-on-error: ${{ github.event_name == 'push' }}
     env:
       IDF_VERSION: v5.5
+      # Install location inside repo workspace (stable for caching)
+      IDF_DIR: ${{ github.workspace }}/.esp/idf/v5.5/esp-idf
+      TOOLS_DIR: ${{ github.workspace }}/.esp/tools
       ESP_IDF_EXPORT_DEBUG: "1"
 
     steps:
@@ -24,7 +26,7 @@ jobs:
         with:
           path: |
             ~/.espressif
-            ${{ github.workspace }}/.esp/tools
+            ${{ env.TOOLS_DIR }}
             ${{ github.workspace }}/.esp/idf
           key: "${{ format('{0}-espidf-{1}-{2}', runner.os, env.IDF_VERSION, hashFiles('**/CMakeLists.txt','**/idf_component.yml','idf_component.yml','managed_components/**','**/requirements.txt','requirements.txt','sdkconfig')) }}"
           restore-keys: |
@@ -35,11 +37,104 @@ jobs:
         with:
           version: ${{ env.IDF_VERSION }}
           path: ${{ github.workspace }}/.esp/idf
-          tools-path: ${{ github.workspace }}/.esp/tools
+          tools-path: ${{ env.TOOLS_DIR }}
 
       # Install tools BEFORE export (idempotent; fixes esp-rom-elfs missing)
       - name: Bootstrap ESP-IDF tools
         shell: bash
         run: |
-          set -euxo pipefail
-          python3 "$IDF_PATH/too_
+          set -euo pipefail
+          echo "Using IDF_DIR=${IDF_DIR}"
+          python3 ${IDF_DIR}/tools/idf_tools.py install
+          python3 ${IDF_DIR}/tools/idf_tools.py install esp-clang
+
+      - name: Verify environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          . ${IDF_DIR}/export.sh
+          which python
+          python -m pip --version
+          idf.py --version
+
+      - name: Run clang-tidy
+        shell: bash
+        env:
+          IDF_TOOLCHAIN: clang
+        # Non-blocking on pushes, blocking on PRs
+        continue-on-error: ${{ github.event_name == 'push' }}
+        run: |
+          set -euo pipefail
+          . ${IDF_DIR}/export.sh
+          idf.py set-target esp32s3
+          idf.py clang-check
+          # Optional HTML report
+          python -m pip install codereport || true
+          idf.py clang-html-report || true
+
+      - name: Upload lint artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp-idf-clang-tidy-report
+          path: |
+            warnings.txt
+            html_report/
+
+  build:
+    name: Build (gated by lint on PRs)
+    runs-on: ubuntu-latest
+    needs: lint
+    env:
+      IDF_VERSION: v5.5
+      IDF_DIR: ${{ github.workspace }}/.esp/idf/v5.5/esp-idf
+      TOOLS_DIR: ${{ github.workspace }}/.esp/tools
+      ESP_IDF_EXPORT_DEBUG: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore ESP-IDF & tools cache
+        id: idf-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.espressif
+            ${{ env.TOOLS_DIR }}
+            ${{ github.workspace }}/.esp/idf
+          key: "${{ format('{0}-espidf-{1}-{2}', runner.os, env.IDF_VERSION, hashFiles('**/CMakeLists.txt','**/idf_component.yml','idf_component.yml','managed_components/**','**/requirements.txt','requirements.txt','sdkconfig')) }}"
+          restore-keys: |
+            ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-
+
+      - name: ESP-IDF Setup
+        uses: espressif/install-esp-idf-action@v1
+        with:
+          version: ${{ env.IDF_VERSION }}
+          path: ${{ github.workspace }}/.esp/idf
+          tools-path: ${{ env.TOOLS_DIR }}
+
+      - name: Bootstrap ESP-IDF tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Using IDF_DIR=${IDF_DIR}"
+          python3 ${IDF_DIR}/tools/idf_tools.py install
+
+      - name: Verify environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          . ${IDF_DIR}/export.sh
+          which python
+          python -m pip --version
+          idf.py --version
+
+      - name: Build
+        shell: bash
+        # Non-blocking on pushes, blocking on PRs
+        continue-on-error: ${{ github.event_name == 'push' }}
+        run: |
+          set -euo pipefail
+          . ${IDF_DIR}/export.sh
+          idf.py set-target esp32s3
+          idf.py build
