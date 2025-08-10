@@ -14,21 +14,20 @@ jobs:
     continue-on-error: ${{ github.event_name == 'push' }}
     env:
       IDF_VERSION: v5.5
-      ESP_TOOLS_PATH: ${{ runner.temp }}/esp-tools
-      ESP_IDF_PATH: ${{ runner.temp }}/esp-idf
-      ESP_IDF_EXPORT_DEBUG: "1"   # more verbose export logs
+      ESP_IDF_EXPORT_DEBUG: "1"
 
     steps:
       - uses: actions/checkout@v4
 
+      # Reuse toolchains & IDF between runs
       - name: Cache ESP-IDF & tools
         id: idf-cache
         uses: actions/cache@v4
         with:
           path: |
             ~/.espressif
-            ${{ env.ESP_TOOLS_PATH }}
-            ${{ env.ESP_IDF_PATH }}
+            ${{ github.workspace }}/.esp/tools
+            ${{ github.workspace }}/.esp/idf
           key: ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-${{ hashFiles('**/CMakeLists.txt', '**/idf_component.yml', 'idf_component.yml', 'managed_components/**', '**/requirements.txt', 'requirements.txt', 'sdkconfig') }}
           restore-keys: |
             ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-
@@ -38,20 +37,16 @@ jobs:
           set -euxo pipefail
           echo "Cache hit: ${{ steps.idf-cache.outputs.cache-hit }}"
           python3 --version
-          echo "HOME=$HOME"
-          echo "ESP_IDF_PATH=$ESP_IDF_PATH"
-          echo "ESP_TOOLS_PATH=$ESP_TOOLS_PATH"
-          ls -la "$HOME" || true
-          ls -la "$ESP_IDF_PATH" || true
-          ls -la "$ESP_TOOLS_PATH" || true
+          echo "ESP_IDF_PATH will be: ${{ github.workspace }}/.esp/idf"
+          echo "ESP_TOOLS_PATH will be: ${{ github.workspace }}/.esp/tools"
+          ls -la "${GITHUB_WORKSPACE}/.esp" || true
 
       - name: ESP-IDF Setup
         uses: espressif/install-esp-idf-action@v1
         with:
           version: ${{ env.IDF_VERSION }}
-          path: ${{ env.ESP_IDF_PATH }}
-          tools-path: ${{ env.ESP_TOOLS_PATH }}
-          # The action installs required tools; no manual idf_tools.py install needed
+          path: ${{ github.workspace }}/.esp/idf
+          tools-path: ${{ github.workspace }}/.esp/tools
 
       - name: Verify environment
         run: |
@@ -60,15 +55,12 @@ jobs:
           which python
           python -m pip --version
           idf.py --version
-          python -c "import sys; print('venv:', sys.prefix)"
 
       - name: Install esp-clang (for clang-tidy)
         run: |
           set -euxo pipefail
-          # Use idf_tools.py explicitly; action already set up IDF_PATH
           python3 "$IDF_PATH/tools/idf_tools.py" install esp-clang
           . "$IDF_PATH/export.sh"
-          # Quick sanity: show clang-tidy path if present
           command -v clang-tidy || true
 
       - name: Run clang-tidy
@@ -99,41 +91,30 @@ jobs:
     continue-on-error: ${{ github.event_name == 'push' }}
     env:
       IDF_VERSION: v5.5
-      ESP_TOOLS_PATH: ${{ runner.temp }}/esp-tools
-      ESP_IDF_PATH: ${{ runner.temp }}/esp-idf
       ESP_IDF_EXPORT_DEBUG: "1"
 
     steps:
       - uses: actions/checkout@v4
 
+      # Same cache key as lint → share the setup
       - name: Restore ESP-IDF & tools cache
         id: idf-cache
         uses: actions/cache@v4
         with:
           path: |
             ~/.espressif
-            ${{ env.ESP_TOOLS_PATH }}
-            ${{ env.ESP_IDF_PATH }}
+            ${{ github.workspace }}/.esp/tools
+            ${{ github.workspace }}/.esp/idf
           key: ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-${{ hashFiles('**/CMakeLists.txt', '**/idf_component.yml', 'idf_component.yml', 'managed_components/**', '**/requirements.txt', 'requirements.txt', 'sdkconfig') }}
           restore-keys: |
             ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}-
-
-      - name: Debug info (before setup)
-        run: |
-          set -euxo pipefail
-          echo "Cache hit: ${{ steps.idf-cache.outputs.cache-hit }}"
-          python3 --version
-          echo "ESP_IDF_PATH=$ESP_IDF_PATH"
-          echo "ESP_TOOLS_PATH=$ESP_TOOLS_PATH"
-          ls -la "$ESP_IDF_PATH" || true
-          ls -la "$ESP_TOOLS_PATH" || true
 
       - name: ESP-IDF Setup
         uses: espressif/install-esp-idf-action@v1
         with:
           version: ${{ env.IDF_VERSION }}
-          path: ${{ env.ESP_IDF_PATH }}
-          tools-path: ${{ env.ESP_TOOLS_PATH }}
+          path: ${{ github.workspace }}/.esp/idf
+          tools-path: ${{ github.workspace }}/.esp/tools
 
       - name: Verify environment
         run: |
