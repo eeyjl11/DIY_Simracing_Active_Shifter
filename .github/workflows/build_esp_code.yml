@@ -54,9 +54,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Make sure the tools land in your cached path
+          echo "IDF_TOOLS_PATH=${IDF_TOOLS_PATH}" >> "$GITHUB_ENV"
+          # Install required tools (idempotent)
           python3 "${IDF_DIR}/tools/idf_tools.py" install
-          # Linter needs esp-clang for clang-tidy; install if missing
-          if ! "${IDF_TOOLS_PATH}"/tools/esp-clang/*/esp-clang/bin/clang-tidy -v >/dev/null 2>&1; then
+          # Ensure the Python virtualenv exists (this was missing)
+          python3 "${IDF_DIR}/tools/idf_tools.py" install-python-env
+          # For the linter job only, ensure esp-clang is present (skip in build job)
+          if [[ "${GITHUB_JOB}" == "lint" ]]; then
             python3 "${IDF_DIR}/tools/idf_tools.py" install esp-clang
           fi
 
@@ -64,7 +69,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Ensure both paths are set for export.sh
           echo "IDF_PATH=${IDF_DIR}" >> "$GITHUB_ENV"
+          echo "IDF_TOOLS_PATH=${IDF_TOOLS_PATH}" >> "$GITHUB_ENV"
           . "${IDF_DIR}/export.sh"
           idf.py --version
 
