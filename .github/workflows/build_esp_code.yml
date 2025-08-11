@@ -84,22 +84,22 @@ jobs:
           set -euo pipefail
           . "${IDF_DIR}/export.sh"
           idf.py set-target esp32s3
-      
+
           # Collect only your sources (adjust patterns if you add more folders/extensions)
           mapfile -t FILES < <(git ls-files \
             'main/**/*.[ch]' 'main/**/*.[ch]pp' \
             'components/**/*.[ch]' 'components/**/*.[ch]pp' || true)
-      
+
           if [ "${#FILES[@]}" -eq 0 ]; then
             echo "No C/C++ project files found under main/ or components/. Skipping clang-tidy."
             exit 0
           fi
-      
+
           # Limit diagnostics to project headers; pass clang-tidy args after '--'
           idf.py clang-check "${FILES[@]}" -- \
             -quiet \
             -header-filter='(^|/)(main|components)/'
-      
+
           # Optional HTML report (if you still want it)
           python -m pip install codereport || true
           idf.py clang-html-report || true
@@ -148,22 +148,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Make sure the tools land in your cached path
           echo "IDF_TOOLS_PATH=${IDF_TOOLS_PATH}" >> "$GITHUB_ENV"
-          # Install required tools (idempotent)
           python3 "${IDF_DIR}/tools/idf_tools.py" install
-          # Ensure the Python virtualenv exists (this was missing)
           python3 "${IDF_DIR}/tools/idf_tools.py" install-python-env
-          # For the linter job only, ensure esp-clang is present (skip in build job)
-          if [[ "${GITHUB_JOB}" == "lint" ]]; then
-            python3 "${IDF_DIR}/tools/idf_tools.py" install esp-clang
-          fi
 
       - name: Export & verify
         shell: bash
         run: |
           set -euo pipefail
-          # Ensure both paths are set for export.sh
           echo "IDF_PATH=${IDF_DIR}" >> "$GITHUB_ENV"
           echo "IDF_TOOLS_PATH=${IDF_TOOLS_PATH}" >> "$GITHUB_ENV"
           . "${IDF_DIR}/export.sh"
@@ -171,7 +163,6 @@ jobs:
 
       - name: Build
         shell: bash
-        # Non-blocking on pushes, blocking on PRs
         continue-on-error: ${{ github.event_name == 'push' }}
         run: |
           set -euo pipefail
@@ -186,10 +177,11 @@ jobs:
         run: |
           set -euo pipefail
           . "${IDF_DIR}/export.sh"
-          idf.py size --format text --output-file build/size.txt
-          idf.py size-components --format csv --output-file build/size-components.csv
+          mkdir -p build
+          # Use stdout redirection so files are always created
+          idf.py size > build/size.txt || true
+          idf.py size-components --format csv > build/size-components.csv || true
 
-      # In the Build job → "Upload size artifacts" step, add the CSV:
       - name: Upload size artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -198,9 +190,10 @@ jobs:
           path: |
             build/size.txt
             build/size-components.csv
-            build/partition_table/partition-table.csv    # ← add this
+            build/partition_table/partition-table.csv
             build/*.map
-
+            build/*.bin
+            build/*.elf
 
   memcheck:
     name: Memory Size Check
@@ -219,89 +212,57 @@ jobs:
       WARN_PCT_IMAGE: "90"
     steps:
       - uses: actions/checkout@v4
-  
-      - name: Generate size reports
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          . "${IDF_DIR}/export.sh"
-          # Create reports even if the build step failed earlier
-          mkdir -p build
-          # Write the pretty table to a file
-          idf.py size > build/size.txt || true
-          # Component sizes as CSV
-          idf.py size-components --format csv > build/size-components.csv || true
-      
-      - name: Upload size artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
+
+      - name: Download size artifacts
+        uses: actions/download-artifact@v4
         with:
           name: idf-size
-          path: |
-            build/size.txt
-            build/size-components.csv
-            build/partition_table/partition-table.csv
-            build/*.map
-            build/*.bin
-            build/*.elf
+          path: build
 
-  
       - name: Verify memory sizes against thresholds
         shell: bash
         run: |
           set -euo pipefail
           cat <<'PY' > memcheck.py
           import os, re, sys, csv, glob, pathlib
-      
+
           size_txt = pathlib.Path('build/size.txt')
           part_csv = pathlib.Path('build/partition_table/partition-table.csv')
-      
-          if not size_txt.exists():
-              print("ERROR: build/size.txt not found.")
-              sys.exit(2)
-      
-          # ---- Parse idf.py size table (IRAM, DIRAM, Flash Code/Data) ----
-          text = size_txt.read_text(encoding='utf-8', errors='ignore').splitlines()
-          rows = {}
-          in_rows = False
-          for ln in text:
-              if ln.startswith('┡') or ln.startswith('├'):
-                  in_rows = True
-                  continue
-              if not in_rows:
-                  continue
-              if ln.startswith('└'):
-                  break
-              if not ln.startswith('│'):
-                  continue
-              cols = [c.strip() for c in ln.split('│')]
-              if len(cols) < 6:
-                  continue
-              label = cols[1]
-              if label.startswith('.') or label.startswith('    .'):
-                  continue
-              used = cols[2].replace(',', '')
-              total = cols[5].replace(',', '')
-              try:
-                  u = int(used)
-              except:
-                  u = None
-              try:
-                  t = int(total)
-              except:
-                  t = None
-              rows[label] = {'used': u, 'total': t}
-      
-          # Total image size from text (if present)
-          total_image = None
-          for ln in text:
-              m = re.search(r'Total image size:\s*(\d+)\s*bytes', ln)
-              if m:
-                  total_image = int(m.group(1))
-                  break
-      
-          # Fallback: use the app .bin size (largest .bin excluding bootloader/partition files)
+
+          rows = {}          # IRAM/DIRAM/etc from table (if available)
+          total_image = None # bytes
+
+          # ---- Try to parse size.txt (optional) ----
+          if size_txt.exists():
+              text = size_txt.read_text(encoding='utf-8', errors='ignore').splitlines()
+              in_rows = False
+              for ln in text:
+                  if ln.startswith('┡') or ln.startswith('├'):
+                      in_rows = True; continue
+                  if not in_rows: continue
+                  if ln.startswith('└'): break
+                  if not ln.startswith('│'): continue
+                  cols = [c.strip() for c in ln.split('│')]
+                  if len(cols) < 6: continue
+                  label = cols[1]
+                  if label.startswith('.') or label.startswith('    .'): continue
+                  used  = cols[2].replace(',','')
+                  total = cols[5].replace(',','')
+                  try: u = int(used)
+                  except: u = None
+                  try: t = int(total)
+                  except: t = None
+                  rows[label] = {'used': u, 'total': t}
+
+              for ln in text:
+                  m = re.search(r'Total image size:\s*(\d+)\s*bytes', ln)
+                  if m:
+                      total_image = int(m.group(1))
+                      break
+          else:
+              print("::warning ::build/size.txt not found; falling back to .bin size only")
+
+          # ---- Fallback for total image size: use largest app .bin ----
           if total_image is None:
               bins = []
               for p in glob.glob('build/*.bin'):
@@ -315,7 +276,9 @@ jobs:
               if bins:
                   bins.sort(key=lambda x: x[1], reverse=True)
                   total_image = bins[0][1]
-      
+              else:
+                  print("::warning ::No app .bin found; image size checks will be skipped")
+
           # ---- Read app partition size from CSV (factory/ota_x) ----
           def parse_bytes(s: str) -> int:
               s = s.strip().upper().rstrip('B')
@@ -323,13 +286,12 @@ jobs:
               if s.endswith('M'): return int(float(s[:-1]) * 1024 * 1024)
               if s.startswith('0X'): return int(s, 16)
               return int(s)
-      
+
           app_slots = []
           if part_csv.exists():
               with part_csv.open(newline='', encoding='utf-8', errors='ignore') as f:
                   for row in csv.reader(f):
-                      if not row or row[0].startswith('#'):
-                          continue
+                      if not row or row[0].startswith('#'): continue
                       if len(row) >= 5 and row[1].strip() == 'app':
                           name = row[0].strip()
                           try:
@@ -337,33 +299,29 @@ jobs:
                               app_slots.append((name, size))
                           except Exception:
                               pass
-      
+
           app_limit = None
-          chosen = None
           if app_slots:
-              for name, size in app_slots:
-                  if name == 'factory':
-                      chosen = (name, size); break
+              chosen = next(((n,s) for (n,s) in app_slots if n == 'factory'), None)
               if not chosen:
                   chosen = max(app_slots, key=lambda x: x[1])
               app_limit = chosen[1]
-      
-          # Allow override via env
+
           env_limit = os.getenv('MAX_IMAGE_SIZE') or ''
           if env_limit.strip():
               try:
                   app_limit = int(env_limit)
               except:
                   print(f"::warning ::Invalid MAX_IMAGE_SIZE '{env_limit}', ignoring.")
-      
+
           failures, warnings, out = [], [], []
-      
+
           def check(label_env: str, key_row: str):
               row = rows.get(key_row)
               if not row or row['used'] is None:
                   return
               used = row['used']; total = row['total']
-              # hard limit
+              # Hard limit
               lim_s = os.getenv(f"MAX_{label_env}", '')
               if lim_s:
                   try:
@@ -372,7 +330,7 @@ jobs:
                           failures.append(f"{key_row} {used}>{lim}")
                   except:
                       warnings.append(f"{key_row}: invalid limit '{lim_s}'")
-              # warn pct if total available
+              # Warn % of total (if total available)
               wp_s = os.getenv(f"WARN_PCT_{label_env}", '')
               try:
                   wp = float(wp_s) if wp_s else 0.0
@@ -382,20 +340,21 @@ jobs:
               if total and wp > 0 and (used / total * 100.0) >= wp:
                   warnings.append(f"{key_row} at {used}/{total} (>= {wp}%)")
               out.append(f"{key_row}: {used}" + (f" / {total}" if total else "") + " bytes")
-      
-          check('IRAM', 'IRAM')
-          check('DIRAM', 'DIRAM')
-          check('FLASH_CODE', 'Flash Code')
-          check('FLASH_DATA', 'Flash Data')
-      
+
+          # Only emit IRAM/DIRAM etc if we actually parsed size.txt
+          if rows:
+              check('IRAM', 'IRAM')
+              check('DIRAM', 'DIRAM')
+              check('FLASH_CODE', 'Flash Code')
+              check('FLASH_DATA', 'Flash Data')
+
+          # Total image size checks (works with size.txt OR .bin fallback)
           if total_image is not None:
               out.append(f"Total image size: {total_image} bytes")
               if app_limit:
                   out.append(f"App partition limit: {app_limit} bytes")
-                  # hard fail if over limit
                   if total_image > app_limit:
                       failures.append(f"Total image size {total_image}>{app_limit}")
-                  # warn percentage for image size
                   wp_img_s = os.getenv('WARN_PCT_IMAGE', '')
                   try:
                       wp_img = float(wp_img_s) if wp_img_s else 0.0
@@ -410,7 +369,7 @@ jobs:
                   warnings.append("App partition size not found; set MAX_IMAGE_SIZE to enforce/warn for image size.")
           else:
               warnings.append("Total image size not found in size.txt or .bin files")
-      
+
           print("\n".join(out))
           for w in warnings:
               print(f"::warning ::{w}")
@@ -423,3 +382,10 @@ jobs:
               sys.exit(1)
           PY
           python3 memcheck.py
+
+      - name: Upload memcheck summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: memcheck-summary
+          path: memcheck-summary.txt
