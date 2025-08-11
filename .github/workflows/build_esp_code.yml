@@ -221,30 +221,30 @@ jobs:
       - uses: actions/checkout@v4
   
       - name: Generate size reports
-  if: always()
-  shell: bash
-  run: |
-    set -euo pipefail
-    . "${IDF_DIR}/export.sh"
-    # Create reports even if the build step failed earlier
-    mkdir -p build
-    # Write the pretty table to a file
-    idf.py size > build/size.txt || true
-    # Component sizes as CSV
-    idf.py size-components --format csv > build/size-components.csv || true
-
-- name: Upload size artifacts
-  if: always()
-  uses: actions/upload-artifact@v4
-  with:
-    name: idf-size
-    path: |
-      build/size.txt
-      build/size-components.csv
-      build/partition_table/partition-table.csv
-      build/*.map
-      build/*.bin
-      build/*.elf
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          . "${IDF_DIR}/export.sh"
+          # Create reports even if the build step failed earlier
+          mkdir -p build
+          # Write the pretty table to a file
+          idf.py size > build/size.txt || true
+          # Component sizes as CSV
+          idf.py size-components --format csv > build/size-components.csv || true
+      
+      - name: Upload size artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: idf-size
+          path: |
+            build/size.txt
+            build/size-components.csv
+            build/partition_table/partition-table.csv
+            build/*.map
+            build/*.bin
+            build/*.elf
 
   
       - name: Verify memory sizes against thresholds
