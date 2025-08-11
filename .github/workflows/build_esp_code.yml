@@ -79,29 +79,30 @@ jobs:
         shell: bash
         env:
           IDF_TOOLCHAIN: clang
-        # Non-blocking on pushes, blocking on PRs
         continue-on-error: ${{ github.event_name == 'push' }}
         run: |
           set -euo pipefail
           . "${IDF_DIR}/export.sh"
           idf.py set-target esp32s3
-          # Analyze only your sources; exclude esp-idf and the .esp cache
-          idf.py clang-check \
-            --source-filter '(^|/)(main|components)/' \
-            --exclude-paths '(/\.esp/|/esp-idf/)' \
-            --run-clang-tidy-options='-quiet'
-          # Optional HTML report
+      
+          # Collect only your sources (adjust patterns if you add more folders/extensions)
+          mapfile -t FILES < <(git ls-files \
+            'main/**/*.[ch]' 'main/**/*.[ch]pp' \
+            'components/**/*.[ch]' 'components/**/*.[ch]pp' || true)
+      
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "No C/C++ project files found under main/ or components/. Skipping clang-tidy."
+            exit 0
+          fi
+      
+          # Limit diagnostics to project headers; pass clang-tidy args after '--'
+          idf.py clang-check "${FILES[@]}" -- \
+            -quiet \
+            -header-filter='(^|/)(main|components)/'
+      
+          # Optional HTML report (if you still want it)
           python -m pip install codereport || true
           idf.py clang-html-report || true
-
-      - name: Upload lint artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: esp-idf-clang-tidy-report
-          path: |
-            warnings.txt
-            html_report/
 
   build:
     name: Build (gated by lint on PRs)
