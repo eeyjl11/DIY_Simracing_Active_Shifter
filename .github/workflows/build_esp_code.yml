@@ -220,18 +220,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
   
-      - name: Download size artifacts
-        uses: actions/download-artifact@v4
+      - name: Upload size artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: idf-size
-          path: build
+          path: |
+            build/size.txt
+            build/size-components.csv
+            build/partition_table/partition-table.csv
+            build/*.bin                    # ← add this to allow a robust fallback
   
       - name: Verify memory sizes against thresholds
         shell: bash
         run: |
           set -euo pipefail
-          cat > memcheck.py <<'PY'
-          import os, re, sys, csv, pathlib
+          cat <<'PY' > memcheck.py
+          import os, re, sys, csv, glob, pathlib
       
           size_txt = pathlib.Path('build/size.txt')
           part_csv = pathlib.Path('build/partition_table/partition-table.csv')
@@ -240,7 +245,7 @@ jobs:
               print("ERROR: build/size.txt not found.")
               sys.exit(2)
       
-          # ---- Parse idf.py size table (IRAM, DIRAM, Flash Code/Data, Total image size) ----
+          # ---- Parse idf.py size table (IRAM, DIRAM, Flash Code/Data) ----
           text = size_txt.read_text(encoding='utf-8', errors='ignore').splitlines()
           rows = {}
           in_rows = False
@@ -272,12 +277,28 @@ jobs:
                   t = None
               rows[label] = {'used': u, 'total': t}
       
+          # Total image size from text (if present)
           total_image = None
           for ln in text:
               m = re.search(r'Total image size:\s*(\d+)\s*bytes', ln)
               if m:
                   total_image = int(m.group(1))
                   break
+      
+          # Fallback: use the app .bin size (largest .bin excluding bootloader/partition files)
+          if total_image is None:
+              bins = []
+              for p in glob.glob('build/*.bin'):
+                  name = pathlib.Path(p).name.lower()
+                  if any(tok in name for tok in ('bootloader', 'partition', 'ota_data', 'boot_app')):
+                      continue
+                  try:
+                      bins.append((p, pathlib.Path(p).stat().st_size))
+                  except FileNotFoundError:
+                      pass
+              if bins:
+                  bins.sort(key=lambda x: x[1], reverse=True)
+                  total_image = bins[0][1]
       
           # ---- Read app partition size from CSV (factory/ota_x) ----
           def parse_bytes(s: str) -> int:
@@ -293,7 +314,6 @@ jobs:
                   for row in csv.reader(f):
                       if not row or row[0].startswith('#'):
                           continue
-                      # Name,Type,SubType,Offset,Size,Flags
                       if len(row) >= 5 and row[1].strip() == 'app':
                           name = row[0].strip()
                           try:
@@ -320,16 +340,13 @@ jobs:
               except:
                   print(f"::warning ::Invalid MAX_IMAGE_SIZE '{env_limit}', ignoring.")
       
-          failures = []
-          warnings = []
-          out = []
+          failures, warnings, out = [], [], []
       
           def check(label_env: str, key_row: str):
               row = rows.get(key_row)
               if not row or row['used'] is None:
                   return
-              used = row['used']
-              total = row['total']
+              used = row['used']; total = row['total']
               # hard limit
               lim_s = os.getenv(f"MAX_{label_env}", '')
               if lim_s:
@@ -370,13 +387,13 @@ jobs:
                       wp_img = 0.0
                       warnings.append(f"Total image size: invalid WARN_PCT_IMAGE '{wp_img_s}'")
                   if wp_img > 0:
-                      pct = 100.0 * total_image / app_limit
-                      if pct >= wp_img:
+                      pct = 100.0 * total_image / app_limit if app_limit else 0.0
+                      if app_limit and pct >= wp_img:
                           warnings.append(f"Total image size at {pct:.2f}% of app partition ({total_image}/{app_limit}) >= {wp_img}%")
               else:
                   warnings.append("App partition size not found; set MAX_IMAGE_SIZE to enforce/warn for image size.")
           else:
-              warnings.append("Total image size not found in build/size.txt")
+              warnings.append("Total image size not found in size.txt or .bin files")
       
           print("\n".join(out))
           for w in warnings:
@@ -390,5 +407,3 @@ jobs:
               sys.exit(1)
           PY
           python3 memcheck.py
-      
-                    if not row or row['used'] is No
