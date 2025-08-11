@@ -29,16 +29,36 @@ jobs:
             ${{ github.workspace }}/.esp/idf
           key: ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}
 
-      # Bootstrap ONLY if cache is cold
       - name: Bootstrap ESP-IDF (first run only)
         if: steps.idf-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$(dirname "${IDF_DIR}")"
-          git clone --depth 1 --branch "${IDF_VERSION}" https://github.com/espressif/esp-idf "${IDF_DIR}"
+      
+          if [ -d "${IDF_DIR}/.git" ]; then
+            echo "Reusing existing esp-idf repo at ${IDF_DIR}"
+            git -C "${IDF_DIR}" remote set-url origin https://github.com/espressif/esp-idf
+            git -C "${IDF_DIR}" fetch --tags --depth 1 origin "${IDF_VERSION}"
+            # Try tag ref explicitly first, then plain tag
+            git -C "${IDF_DIR}" checkout -f "refs/tags/${IDF_VERSION}" 2>/dev/null || \
+            git -C "${IDF_DIR}" checkout -f "${IDF_VERSION}"
+          else
+            echo "Fresh clone of esp-idf ${IDF_VERSION} into ${IDF_DIR}"
+            rm -rf "${IDF_DIR}" || true
+            git clone --depth 1 --branch "${IDF_VERSION}" https://github.com/espressif/esp-idf "${IDF_DIR}"
+          fi
+      
+          # Install required tools (idempotent)
           python3 "${IDF_DIR}/tools/idf_tools.py" install
-          # Lint needs esp-clang
+          # Linter job only: install esp-clang as well
+          if [ "${{ job.status }}" != "" ]; then :; fi
+
+      - name: Install esp-clang (first run only)
+        if: steps.idf-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
           python3 "${IDF_DIR}/tools/idf_tools.py" install esp-clang
 
       # On all runs: set IDF_PATH and verify
@@ -107,8 +127,24 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$(dirname "${IDF_DIR}")"
-          git clone --depth 1 --branch "${IDF_VERSION}" https://github.com/espressif/esp-idf "${IDF_DIR}"
+      
+          if [ -d "${IDF_DIR}/.git" ]; then
+            echo "Reusing existing esp-idf repo at ${IDF_DIR}"
+            git -C "${IDF_DIR}" remote set-url origin https://github.com/espressif/esp-idf
+            git -C "${IDF_DIR}" fetch --tags --depth 1 origin "${IDF_VERSION}"
+            # Try tag ref explicitly first, then plain tag
+            git -C "${IDF_DIR}" checkout -f "refs/tags/${IDF_VERSION}" 2>/dev/null || \
+            git -C "${IDF_DIR}" checkout -f "${IDF_VERSION}"
+          else
+            echo "Fresh clone of esp-idf ${IDF_VERSION} into ${IDF_DIR}"
+            rm -rf "${IDF_DIR}" || true
+            git clone --depth 1 --branch "${IDF_VERSION}" https://github.com/espressif/esp-idf "${IDF_DIR}"
+          fi
+      
+          # Install required tools (idempotent)
           python3 "${IDF_DIR}/tools/idf_tools.py" install
+          # Linter job only: install esp-clang as well
+          if [ "${{ job.status }}" != "" ]; then :; fi
 
       - name: Set IDF_PATH & verify
         shell: bash
