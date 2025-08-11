@@ -147,13 +147,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Make sure the tools land in your cached path
+          echo "IDF_TOOLS_PATH=${IDF_TOOLS_PATH}" >> "$GITHUB_ENV"
+          # Install required tools (idempotent)
           python3 "${IDF_DIR}/tools/idf_tools.py" install
+          # Ensure the Python virtualenv exists (this was missing)
+          python3 "${IDF_DIR}/tools/idf_tools.py" install-python-env
+          # For the linter job only, ensure esp-clang is present (skip in build job)
+          if [[ "${GITHUB_JOB}" == "lint" ]]; then
+            python3 "${IDF_DIR}/tools/idf_tools.py" install esp-clang
+          fi
 
       - name: Export & verify
         shell: bash
         run: |
           set -euo pipefail
+          # Ensure both paths are set for export.sh
           echo "IDF_PATH=${IDF_DIR}" >> "$GITHUB_ENV"
+          echo "IDF_TOOLS_PATH=${IDF_TOOLS_PATH}" >> "$GITHUB_ENV"
           . "${IDF_DIR}/export.sh"
           idf.py --version
 
