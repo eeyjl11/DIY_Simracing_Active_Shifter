@@ -209,22 +209,23 @@ jobs:
     continue-on-error: ${{ github.event_name == 'push' }}
     env:
       # Optional hard limits; leave blank to skip
-      MAX_IRAM: "16384"     # fail if IRAM goes above this (set 16383 if you want 1B headroom)
-      MAX_DIRAM: ""         # e.g. 341760
+      MAX_IRAM: "16384"
+      MAX_DIRAM: "341760"
       # If you set MAX_IMAGE_SIZE, it overrides auto-detected partition size
       MAX_IMAGE_SIZE: ""
       # Soft warnings when near total (percent of reported total)
       WARN_PCT_IRAM: "100"
       WARN_PCT_DIRAM: "90"
+      WARN_PCT_IMAGE: "90"
     steps:
       - uses: actions/checkout@v4
-
+  
       - name: Download size artifacts
         uses: actions/download-artifact@v4
         with:
           name: idf-size
           path: build
-
+  
       - name: Verify memory sizes against thresholds
         shell: bash
         run: |
@@ -233,38 +234,46 @@ jobs:
           import os, re, sys, csv, pathlib
           size_txt = pathlib.Path('build/size.txt')
           part_csv = pathlib.Path('build/partition_table/partition-table.csv')
-
+  
           if not size_txt.exists():
               print("ERROR: build/size.txt not found.")
               sys.exit(2)
-
+  
           # ---- Parse idf.py size table (IRAM, DIRAM, Flash Code/Data, Total image size) ----
           text = size_txt.read_text(encoding='utf-8', errors='ignore').splitlines()
-          def first_num(s):
-              m = re.search(r'(\d+)', s); return int(m.group(1)) if m else None
           rows = {}
           in_rows = False
           for ln in text:
-              if ln.startswith('┡') or ln.startswith('├'): in_rows = True; continue
-              if not in_rows: continue
-              if ln.startswith('└'): break
-              if not ln.startswith('│'): continue
+              if ln.startswith('┡') or ln.startswith('├'):
+                  in_rows = True
+                  continue
+              if not in_rows:
+                  continue
+              if ln.startswith('└'):
+                  break
+              if not ln.startswith('│'):
+                  continue
               cols = [c.strip() for c in ln.split('│')]
-              if len(cols) < 6: continue
+              if len(cols) < 6:
+                  continue
               label = cols[1]
-              if label.startswith('.') or label.startswith('    .'): continue
-              used = cols[2].replace(',',''); total = cols[5].replace(',','')
+              if label.startswith('.') or label.startswith('    .'):
+                  continue
+              used = cols[2].replace(',','')
+              total = cols[5].replace(',','')
               try: u = int(used)
               except: u = None
               try: t = int(total)
               except: t = None
               rows[label] = {'used': u, 'total': t}
-
+  
           total_image = None
           for ln in text:
               m = re.search(r'Total image size:\s*(\d+)\s*bytes', ln)
-              if m: total_image = int(m.group(1)); break
-
+              if m:
+                  total_image = int(m.group(1))
+                  break
+  
           # ---- Read app partition size from CSV (factory/ota_x) ----
           def parse_bytes(s):
               s = s.strip().upper().rstrip('B')
@@ -272,13 +281,12 @@ jobs:
               if s.endswith('M'): return int(float(s[:-1]) * 1024 * 1024)
               if s.startswith('0X'): return int(s, 16)
               return int(s)
-
+  
           app_slots = []
           if part_csv.exists():
               with part_csv.open(newline='', encoding='utf-8', errors='ignore') as f:
                   for row in csv.reader(f):
                       if not row or row[0].startswith('#'): continue
-                      # Name,Type,SubType,Offset,Size,Flags
                       if len(row) >= 5 and row[1].strip() == 'app':
                           name = row[0].strip()
                           try:
@@ -286,8 +294,7 @@ jobs:
                               app_slots.append((name, size))
                           except Exception:
                               pass
-
-          # Choose the slot we likely built for: prefer 'factory', else largest app slot
+  
           app_limit = None
           chosen = None
           if app_slots:
@@ -297,60 +304,19 @@ jobs:
               if not chosen:
                   chosen = max(app_slots, key=lambda x: x[1])
               app_limit = chosen[1]
-
+  
           # Allow override via env
           env_limit = os.getenv('MAX_IMAGE_SIZE') or ''
           if env_limit.strip():
-              try: app_limit = int(env_limit)
-              except: print(f"::warning ::Invalid MAX_IMAGE_SIZE '{env_limit}', ignoring.")
-
-          # ---- Evaluate and report ----
+              try:
+                  app_limit = int(env_limit)
+              except:
+                  print(f"::warning ::Invalid MAX_IMAGE_SIZE '{env_limit}', ignoring.")
+  
           failures = []
           warnings = []
           out = []
-
+  
           def check(label, key):
               row = rows.get(key)
-              if not row or row['used'] is None: return
-              used = row['used']; total = row['total']
-              # hard limit
-              lim_s = os.getenv(f"MAX_{label.replace(' ','_').upper()}", '')
-              if lim_s:
-                  try:
-                      lim = int(lim_s)
-                      if used > lim: failures.append(f"{key} {used}>{lim}")
-                  except: warnings.append(f"{key}: invalid limit '{lim_s}'")
-              # warn pct if total available
-              wp = float(os.getenv(f"WARN_PCT_{label.replace(' ','_').upper()}", '0') or 0)
-              if total and wp>0 and used/total*100 >= wp:
-                  warnings.append(f"{key} at {used}/{total} (>= {wp}%)")
-              out.append(f"{key}: {used}" + (f" / {total}" if total else "") + " bytes")
-
-          check('IRAM', 'IRAM')
-          check('DIRAM', 'DIRAM')
-          check('FLASH_CODE', 'Flash Code')
-          check('FLASH_DATA', 'Flash Data')
-
-          if total_image is not None:
-              out.append(f"Total image size: {total_image} bytes")
-              if app_limit:
-                  out.append(f"App partition limit: {app_limit} bytes")
-                  if total_image > app_limit:
-                      failures.append(f"Total image size {total_image}>{app_limit}")
-              else:
-                  warnings.append("App partition size not found; set MAX_IMAGE_SIZE to enforce a limit.")
-
-          print("\n".join(out))
-          for w in warnings: print(f"::warning ::{w}")
-          pathlib.Path('memcheck-summary.txt').write_text("\n".join(out) + ("\nFAILED: " + ", ".join(failures) if failures else "") + "\n", encoding='utf-8')
-          if failures:
-              print("ERROR: Memory thresholds exceeded:", ", ".join(failures))
-              sys.exit(1)
-          PY
-
-      - name: Upload memcheck summary
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: memcheck-summary
-          path: memcheck-summary.txt
+              if not row or row['used'] is No
