@@ -1,5 +1,0 @@
-Checks: '-*,bugprone-*,performance-*,readability-*'
-WarningsAsErrors: ''
-HeaderFilterRegex: '(^|/)(main|components)/'
-ExcludeHeaderFilterRegex: '(/\.esp/|/esp-idf/)'
-FormatStyle: none
