@@ -42,8 +42,7 @@ jobs:
           . "$IDF_PATH/export.sh"
           idf.py set-target esp32s3
           idf.py clang-check \
-          --run-clang-tidy-options "-header-filter='(^|.*/)(main|components)/' \
-                                    --exclude-header-filter='(^|.*/)(esp-idf|\\.esp|build)/'"
+            --run-clang-tidy-options "-header-filter=(^|.*/)(main|components)/ -source-filter=(^|.*/)(main|components)/"
           # Optional HTML report
           python -m pip install codereport || true
           idf.py clang-html-report || true
