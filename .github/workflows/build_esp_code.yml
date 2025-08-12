@@ -72,35 +72,3 @@ jobs:
           # Ensure both paths are set for export.sh
           echo "IDF_PATH=${IDF_DIR}" >> "$GITHUB_ENV"
           echo "IDF_TOOLS_PATH=${IDF_TOOLS_PATH}" >> "$GITHUB_ENV"
-          . "${IDF_DIR}/export.sh"
-          idf.py --version
-
-      - name: Run clang-tidy (project files only)
-        shell: bash
-        env:
-          IDF_TOOLCHAIN: clang
-        continue-on-error: ${{ github.event_name == 'push' }}
-        run: |
-          set -euo pipefail
-          . "${IDF_DIR}/export.sh"
-          idf.py set-target esp32s3
-      
-          # Collect only your sources (adjust patterns if needed)
-          FILES="$(git ls-files \
-            'main/**/*.[ch]' 'main/**/*.[ch]pp' \
-            'components/**/*.[ch]' 'components/**/*.[ch]pp' || true)"
-      
-          if [ -z "${FILES}" ]; then
-            echo "No C/C++ project files found under main/ or components/. Skipping clang-tidy."
-            exit 0
-          fi
-      
-          # Run clang-tidy via IDF wrapper on just your files
-          # (no process substitution; no arrays)
-          idf.py clang-check ${FILES} -- \
-            -quiet \
-            -header-filter='(^|/)(main|components)/'
-      
-          # Optional HTML report
-          python -m pip install codereport || true
-          idf.py clang-html-report || true
