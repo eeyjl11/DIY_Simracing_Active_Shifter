@@ -2,9 +2,9 @@ name: ESP-IDF Build
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, development ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, development ]
 
 jobs:
   lint:
@@ -41,7 +41,9 @@ jobs:
           set -e
           . "$IDF_PATH/export.sh"
           idf.py set-target esp32s3
-          idf.py clang-check
+          idf.py clang-check \
+          --run-clang-tidy-options "-header-filter='(^|.*/)(main|components)/' \
+                                    --exclude-header-filter='(^|.*/)(esp-idf|\\.esp|build)/'"
           # Optional HTML report
           python -m pip install codereport || true
           idf.py clang-html-report || true
