@@ -10,65 +10,80 @@ jobs:
   lint:
     name: Lint (clang-tidy via ESP-IDF)
     runs-on: ubuntu-latest
-    env:
-      IDF_VERSION: v5.5
-      # Fixed install locations (cacheable)
-      IDF_DIR: ${{ github.workspace }}/.esp/idf/v5.5/esp-idf
-      IDF_TOOLS_PATH: ${{ github.workspace }}/.esp/tools
-      ESP_IDF_EXPORT_DEBUG: "1"
+    # Non-blocking on pushes, blocking on PRs
+    continue-on-error: ${{ github.event_name == 'push' }}
+
     steps:
       - uses: actions/checkout@v4
 
-      # Shared cache for esp-idf + tools
-      - name: Cache ESP-IDF & tools
-        id: idf-cache
-        uses: actions/cache@v4
+      - name: ESP-IDF Setup
+        uses: espressif/install-esp-idf-action@v1
         with:
+          version: "v5.5"
+
+      - name: Install ESP-IDF tools (incl. esp-clang)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Install all required tools (core + python deps)
+          python3 "$IDF_PATH/tools/idf_tools.py" install
+          # Install esp-clang for clang-tidy
+          python3 "$IDF_PATH/tools/idf_tools.py" install esp-clang
+          # Activate the ESP-IDF environment now that tools are in place
+          . "$IDF_PATH/export.sh"
+          idf.py --version
+
+      - name: Run clang-tidy
+        shell: bash
+        env:
+          IDF_TOOLCHAIN: clang
+        run: |
+          set -e
+          . "$IDF_PATH/export.sh"
+          idf.py set-target esp32s3
+          idf.py clang-check
+          # Optional HTML report
+          python -m pip install codereport || true
+          idf.py clang-html-report || true
+
+      - name: Upload lint artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: esp-idf-clang-tidy-report
           path: |
-            ~/.espressif
-            ${{ env.IDF_TOOLS_PATH }}
-            ${{ github.workspace }}/.esp/idf
-          key: ${{ runner.os }}-espidf-${{ env.IDF_VERSION }}
+            warnings.txt
+            html_report/
 
-      # Clone esp-idf only if cache is cold
-      - name: Bootstrap ESP-IDF (first run only)
-        if: steps.idf-cache.outputs.cache-hit != 'true'
+  build:
+    name: Build (gated by lint on PRs)
+    runs-on: ubuntu-latest
+    needs: lint
+    # Non-blocking on pushes, blocking on PRs
+    continue-on-error: ${{ github.event_name == 'push' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ESP-IDF Setup
+        uses: espressif/install-esp-idf-action@v1
+        with:
+          version: "v5.5"
+
+      - name: Install ESP-IDF tools
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$(dirname "${IDF_DIR}")"
-          if [ -d "${IDF_DIR}/.git" ]; then
-            echo "Reusing existing esp-idf repo at ${IDF_DIR}"
-            git -C "${IDF_DIR}" remote set-url origin https://github.com/espressif/esp-idf
-            git -C "${IDF_DIR}" fetch --tags --depth 1 origin "${IDF_VERSION}"
-            git -C "${IDF_DIR}" checkout -f "refs/tags/${IDF_VERSION}" 2>/dev/null || \
-            git -C "${IDF_DIR}" checkout -f "${IDF_VERSION}"
-          else
-            echo "Fresh clone of esp-idf ${IDF_VERSION} into ${IDF_DIR}"
-            rm -rf "${IDF_DIR}" || true
-            git clone --depth 1 --branch "${IDF_VERSION}" https://github.com/espressif/esp-idf "${IDF_DIR}"
-          fi
+          # Install required toolchains
+          python3 "$IDF_PATH/tools/idf_tools.py" install
+          # Activate environment
+          . "$IDF_PATH/export.sh"
+          idf.py --version
 
-      # Ensure tools (incl. Python venv) always exist before export.sh (fast no-op on hits)
-      - name: Ensure ESP-IDF tools
+      - name: Build
         shell: bash
         run: |
-          set -euo pipefail
-          # Make sure the tools land in your cached path
-          echo "IDF_TOOLS_PATH=${IDF_TOOLS_PATH}" >> "$GITHUB_ENV"
-          # Install required tools (idempotent)
-          python3 "${IDF_DIR}/tools/idf_tools.py" install
-          # Ensure the Python virtualenv exists (this was missing)
-          python3 "${IDF_DIR}/tools/idf_tools.py" install-python-env
-          # For the linter job only, ensure esp-clang is present (skip in build job)
-          if [[ "${GITHUB_JOB}" == "lint" ]]; then
-            python3 "${IDF_DIR}/tools/idf_tools.py" install esp-clang
-          fi
-
-      - name: Export & verify
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Ensure both paths are set for export.sh
-          echo "IDF_PATH=${IDF_DIR}" >> "$GITHUB_ENV"
-          echo "IDF_TOOLS_PATH=${IDF_TOOLS_PATH}" >> "$GITHUB_ENV"
+          set -e
+          . "$IDF_PATH/export.sh"
+          idf.py set-target esp32s3
+          idf.py build
